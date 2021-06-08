@@ -1,0 +1,139 @@
+import axios from 'axios'
+import store from '../store/index'
+import { getToken, getTokenType, getCookie, setCookie, setToken } from '@/utils/auth'
+import router from '../router/index'
+import { MOBILE_PATH } from './https'
+
+
+const service = axios.create({
+    //正式
+    // baseURL: MOBILE_PATH,
+    baseURL: '/',
+    timeout: 10000,
+})
+
+export let http = {}
+// 添加请求拦截器 
+service.interceptors.request.use(
+    config => {
+        /**
+         * 判断auth字段中的token与url中的路径前缀是否符合
+         */
+        const authTmp = getCookie('auth')
+        if (authTmp) {
+            let auth = JSON.parse(authTmp)
+            if (auth) {
+                if (store.state.user.token !== '' && !config.url.startsWith('home')) {
+                    config.headers.Authorization = `${auth.tokenType} ${auth.accessToken}`
+                    /**
+                     * 给一个变量控制接口重复请求
+                     */
+                    config['refresh_token'] = false
+                }
+            }
+            return config
+
+        } else {
+            return config
+        }
+    },
+    error => {
+        return Promise.reject(error)
+    }
+)
+service.interceptors.response.use(
+    response => {
+        return response
+    },
+    error => {
+        /**
+         * 条件成立时，刷新token然后将请求失败的接口通过axios.request()返回重新请求
+         */
+        let response = error.response
+        if (response.status === 401 && !response.config.refresh_token) {
+            let config = response.config
+            config.refresh_token = true
+            const authTmp = getCookie('auth')
+            let auth = JSON.parse(authTmp)
+            response = store.dispatch('user/refresh', auth.refreshToken).then((res) => {
+                config.headers.Authorization = `${res.tokenType} ${res.refreshToken}`
+                config.refresh_token = false
+                let ser = service.request(config)
+                return ser
+            }).catch((error) => {
+                console.log(error);
+            })
+            return response
+        }
+        return Promise.reject(error.response.data)
+    }
+)
+
+/**
+ * 封装get方法
+ * @param url
+ * @param data
+ * @returns {Promise}
+ */
+http.get = function (url, params = {}) {
+    return new Promise((resolve, reject) => {
+        service.get(url, {
+            params: params
+        }).then(response => {
+            resolve(response.data);
+        }).catch(err => {
+            reject(err)
+        })
+    })
+}
+/**
+ * 封装post请求
+ * @param url
+ * @param data
+ * @returns {Promise}
+ */
+http.post = function (url, data = {}) {
+
+    let formData = new FormData()
+    const objChangeMap = (obj) => {
+        let map = new Map();
+        for (let key in obj) {
+            map.set(key, obj[key]);
+        }
+        return map;
+    }
+    let map = objChangeMap(data)
+    map.forEach((val, key) => {
+        formData.set(key, val)
+    })
+    return new Promise((resolve, reject) => {
+        service({
+            method: 'post',
+            url: url,
+            data: formData,
+            timeout: 60000,
+        }).then(response => {
+            resolve(response.data);
+        }).catch(err => {
+            reject(err)
+        })
+    })
+}
+
+/**
+ * 封装delete方法
+ * @param url
+ * @param data
+ * @returns {Promise}
+ */
+http.delete = function (url, params = {}) {
+    return new Promise((resolve, reject) => {
+        service.delete(url).then(response => {
+            resolve(response.data);
+        }).catch(err => {
+            reject(err)
+        })
+    })
+}
+
+export default service
